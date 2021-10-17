@@ -162,6 +162,153 @@ fork(void) {
     return -1;
   }
 
-  if (())
-  
+  // 复制进程栈
+  if ((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0) {
+    kfree(np->kstack);
+    np->kstack = 0;
+    np->state = UNUSED;
+    return -1;
+  }
+  np->sz = curproc->sz;
+  np->parent = curproc;
+  *np->tf = *curproc->tf;
+
+  // 清理 eax 寄存器，以便让子进程 fork 返回 0
+  np->tf->eax = 0;
+
+  for (i = 0; i < NOFILE, i++)
+    if (curproc->ofile[i])
+      np->ofile[i] = filedup(curproc->ofile[i]);
+  np->cwd = idup(curproc->cwd);
+
+  safestrcpy(np->name, curproc->name, sizeof(curproc->name));
+
+  pid = np->pid;
+
+  acquire(&ptable.lock);
+  np->state = RUNNABLE;
+  release(&ptable.lock);
+
+  return pid;
+}
+
+// 退出当前进程，不返回。
+// 退出的进程状态变为 zombie，直到
+// 父进程调用 wait() 来处理。
+void
+exit(void) {
+  struct proc *curproc = myproc();
+  struct proc *p;
+  int32 fd;
+
+  if (curproc == initproc)
+    panic("init exiting");
+
+  // 关闭所有打开的文件
+  for (fd = 0; fd < NOFILE; fd++) {
+    if (curproc->ofile[fd]) {
+      fileclose(curproc->ofile[fd]);
+      curproc->ofile[fd] = 0;
+    }
+  }
+
+  begin_op();
+  input(curproc->cwd);
+  end_op();
+  curproc->cwd = 0;
+
+  acquire(&ptable.lock);
+  // 父进程可能在睡眠
+  wakeup1(curproc->parent);
+
+  // 将该进程的子进程交给 init 进程管理
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->parent == curproc) {
+      p->parent = initproc;
+      if (p->state == ZOMBIE)
+	wakeup1(initproc);
+    }
+  }
+
+  // 进入 scheduler, 不返回
+  curproc->state = ZOMBIE;
+  sched();
+  panic("zombie exit");
+}
+
+// 等待一个子进程退出，返回子进程的 pid
+// 如果这个进程没有子进程则返回 -1。
+int32
+wait(void) {
+  struct proc *p;
+  int32 havekids, pid;
+  struct proc *curproc = myproc();
+
+  acquire(&ptable.lock);
+  for (;;) {
+    havekids = 0;
+    for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+      if (p->parent != curproc)
+	continue;
+      havekids = 1;
+      if (p->state == ZOMBIE) {
+	pid = p->pid;
+	kfree(p->kstack);
+	p->kstack = 0;
+	freevm(p->pgdir);
+	p->pid = 0;
+	p->parent = 0;
+	p->name[0] = 0;
+	p->killed = 0;
+	p->state = UNUSED;
+	release(&ptable.lock);
+	return pid;
+      }
+    }
+
+    if (!havekids || curpeoc->killed) {
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // 等待子进程退出
+    sleep(curproc, &ptable.lock);
+  }
+}
+
+void
+scheduler(void) {
+  struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+
+  for (;;) {
+    // 在这个 cpu 中开启中断
+    sti();
+
+    // 寻找一个可以运行的进程
+    acquire(&ptable.lock);
+    for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+      if (p->state != RUNNABLE)
+	continue;
+
+      // 控制权转移到被选中的进程。被选中的进程要负责释放
+      // ptable.lock。然后在回到本函数之前再获取 ptable.lock。
+      c->proc = p;
+      switchuvm(p);
+      p->state = RUNNING;
+
+      swtch(&(c->scheduler), p->context);
+      switchkvm();
+
+      c->proc = 0;
+    }
+    release(&ptable.lock);
+  }
+}
+
+
+void
+sched(void) {
+  int intena;
 }
