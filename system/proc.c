@@ -311,4 +311,72 @@ scheduler(void) {
 void
 sched(void) {
   int intena;
+  struct proc *p = myproc();
+
+  if (!holding(&ptable.lock))
+    panic("sched ptable.lock");
+  if (mycpu()->ncli != 1)
+    panic("sched locks");
+  if (p->state == RUNNING)
+    panic("sched running");
+  if (readeflags() & FL_IF)
+    panic("sched interruptible");
+  intena = mycpu()->intena;
+  swtch(&p->context, mycpu()->scheduler);
+  mycpu()->intena = intena;
 }
+
+// 放弃 CUP
+void
+yield(void) {
+  acquire(&ptable.lock);
+  myproc()->state = RUNNABLE;
+  sched();
+  release(&ptable.lock);
+}
+
+void
+forkret(void) {
+  static int first = 1;
+
+  release(&ptable.lock);
+
+  if (first) {
+    first = 0;
+    iinit(ROOTDEV);
+    initlog(ROOTDEV);
+  }
+
+  // 返回到调用者，通常是 trapret
+}
+
+void
+sleep(void *chan, struct spinlock *lk) {
+  struct proc *p = myproc();
+
+  if (p == 0)
+    panic("sleep");
+
+  if (lk == 0)
+    panic("sleep without lk");
+
+  // 为了改变 p->state 和调用 sched，必须要持有 ptable.lock
+  // 一旦持有了 ptable.lock, 可以保证不会错过任何 wakeup(因为要
+  // wakeup 要执行必须要持有 ptable.lock)
+  if (lk == &ptable.lock) {
+    acquire(&ptable.lock);
+    release(lk);
+  }
+
+  p->chan = chan;
+  p->state = SLEEPING;
+
+  sched();
+
+  p->chan = 0;
+
+  if (lk != &ptable.lock) {
+    release(&pta)
+  }
+}
+
