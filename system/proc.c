@@ -376,7 +376,78 @@ sleep(void *chan, struct spinlock *lk) {
   p->chan = 0;
 
   if (lk != &ptable.lock) {
-    release(&pta)
+    release(&ptable.lock);
+    acquire(lk);
   }
 }
 
+// 唤醒所有在 chan 上等待的进程。必须持有 ptable
+static void
+wakeup1(void *chan) {
+  struct proc *p;
+
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    if (p->state == SLEEPING && p->chan == chan)
+      p->state = RUNNABLE;
+}
+
+// 唤醒所有在 chan 上等待的进程
+void
+wakeup(void *chan) {
+  acquire(&ptable.lock);
+  wakeup1(chan);
+  release(&ptable.lock);
+}
+
+// 根据给定的 pid 杀掉进程
+// 进程不会退出直到它返回到用户空间
+int
+kill(int32 pid) {
+  struct proc *p;
+
+  acquire(&ptable.lock);
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->pid == pid) {
+      p->killed = 1;
+      if (p->state == SLEEPING)
+	p->state = RUNNABLE;
+      release(&ptable.lock);
+      return 0;
+    }
+  }
+  release(&ptable.lock);
+  return -1;
+}
+
+void
+procdump(void) {
+  static char *states[] = {
+    [UNUSED]   "unused",
+    [EMBRYO]   "embryo",
+    [SLEEPING] "sleeping",
+    [RUNNABLE] "runnable",
+    [RUNNING]  "running",
+    [ZOMBIE]   "zombie"
+  };
+
+  int32 i;
+  struct proc *p;
+  char *state;
+  uint32 pc[10];
+
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == UNUSED)
+      continue;
+    if (p->state >= 0 && p->state < NELEM(states) && states[p->state])
+      state = states[p->state];
+    else
+      state = "???";
+    cprintf("%d %s %s", p->pid, state, p->name);
+    if (p->state == SLEEPING) {
+      getcallerpcs((uint32*)p->context->ebp+2, pc);
+      for (i = 0; i < 10 && pc[i] != 0; i++)
+	cprintf(" \p", pc[i]);
+    }
+    cprintf("\n");
+  }
+}
