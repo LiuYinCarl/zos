@@ -148,3 +148,40 @@ write_log(void) {
   }
 }
 
+static void
+commit() {
+  if (log.lh.n > 0) {
+    write_log();
+    write_head();
+    install_trans();
+    log.lh.n = 0;
+    write_head();
+  }
+}
+
+// 调用者已经修改了 b->data 并且已经完成了对 buffer 的修改
+// 记录 block 号并且将 cache 中的块标记为 B_DIRTY
+// commit()/write_log() 将会进行写磁盘操作
+void
+log_write(struct buf *b) {
+  int32 i;
+
+  if (log.lh.n >= LOGSIZE || log.lh.n >= log.size - 1)
+    panic("too big a transaction");
+  if (log.outstanding < 1)
+    panic("log_write outside of trans");
+
+  acquire(&log.lock);
+
+  for (i = 0; i < log.lh.n; i++) {
+    if (log.lh.block[i] == b->blockno)
+      break;
+  }
+
+  log.lh.block[i] = b->blockno;
+  if (i == log.lh.n)
+    log.lh.n++;
+  b->flags |= B_DIRTY;
+  release(&log.lock);
+}
+
