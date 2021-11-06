@@ -104,4 +104,37 @@ fileread(struct file *f, char *addr, int32 n) {
 }
 
 // 写文件
+int32
+filewrite(struct file *f, char *addr, int32 n) {
+  int32 r;
+
+  if (f->writable == 0)
+    return -1;
+  if (f->type == FD_PIPE)
+    return pipewrite(f->pipe, addr, n);
+  if (f->type == FD_INODE) {
+    int32 max = ((MAXOPBLOCKS-1-1-2) / 2) * 512;
+    int32 i = 0;
+    while (i < n) {
+      int32 n1 = n - i;
+      if (n1 > max)
+	n1 = max;
+
+      begin_op();
+      ilock(f->ip);
+      if ((r = writei(f->ip, addr + i, f->off, n1)) > 0)
+	f->off += r;
+      iunlock(f->ip);
+      end_op();
+
+      if (r < 0)
+	break;
+      if (r != n1)
+	panic("short filewrite");
+      i += r;
+    }
+    return i == n ? n : -1;
+  }
+  panic("filewrite");
+}
 
