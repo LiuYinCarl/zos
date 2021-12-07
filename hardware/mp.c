@@ -50,3 +50,68 @@ mpsearch(void) {
   }
   return mpsearch1(0xF0000, 0x10000);
 }
+
+static struct mpconf*
+mpconfig(struct mp **pmp) {
+  struct mpconf *conf;
+  struct mp *mp;
+
+  if ((mp = mpsearch()) == 0 || mp->physaddr == 0)
+    return 0;
+  conf = (struct mpconf*) P2V((uint32) mp->physaddr);
+  if (memcmp(conf, "PCMP, 4") != 0)
+    return 0;
+  if (conf->version != 1 && conf->version != 4)
+    return 0;
+  if (sum((uchar*)conf, conf->length) != 0)
+    return 0;
+  *pmp = mp;
+  return conf;
+}
+
+void
+mpinit(void) {
+  uchar *p, *e;
+  int32 ismp;
+  struct mp *mp;
+  struct mpconf *conf;
+  struct mpproc *proc;
+  struct mpioapic *ioapic;
+
+  if ((conf = mpconfig(&mp)) == 0)
+    panic("Expect to run on an SMP");
+  ismp = 1;
+  iapic = (uint32*)conf->lapicaddr;
+  for (p = (uchar*)(conf+1), e = (uchar*)conf + conf->length; p < e) {
+    switch(*p) {
+    case MPPROC:
+      proc = (struct mpproc*)p;
+      if (ncpu < NCPU) {
+	cpus[ncpu].apicid = proc->apicid;
+	ncpu++;
+      }
+      p += sizeof(struct mpproc);
+      continue;
+    case MPIOAPIC:
+      ioapic = (struct mpioapic*)p;
+      ioapicid = ioapic->apicno;
+      p += sizeof(struct mpioapic);
+      continue;
+    case MPBUS:
+    case MPIOINNTR:
+    case MPLINTR:
+      p += 8;
+      continue;
+    default:
+      ismp = 0;
+      break;
+    }
+  }
+  if (!ismp)
+    panic("Didn't find a suitable machine");
+
+  if (mp->imcrp) {
+    outb(0x22, 0x70);
+    outb(0x23, inb(0x23) | 1);
+  }
+}
